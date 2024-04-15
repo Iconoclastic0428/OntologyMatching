@@ -18,7 +18,6 @@ std::vector<std::string> split(const std::string &text) {
 std::vector<std::string> text_to_ngrams(const std::string& text, int n = 3) {
     std::vector<std::string> ngrams;
     if (text.size() < n) {
-        std::cout << text << std::endl;
         ngrams.push_back(text);
         return ngrams;
     }
@@ -28,31 +27,28 @@ std::vector<std::string> text_to_ngrams(const std::string& text, int n = 3) {
     return ngrams;
 }
 
-std::vector<std::string> text_to_ngrams_words(const std::string &text, int n = 3) {
-    auto words = split(text);
+std::vector<std::string> text_to_ngrams_words(const std::vector<std::string>& words, int n = 3) {
     std::vector<std::string> ngrams;
 
     if (words.size() < static_cast<size_t>(n)) {
-        std::string allWords;
-        for (const auto& word : words) {
-            allWords += word + " ";
+        std::ostringstream allWordsStream;
+        for (size_t i = 0; i < words.size(); ++i) {
+            if (i > 0) allWordsStream << ' ';
+            allWordsStream << words[i];
         }
-        // Trim the trailing space and add to ngrams
-        if (!allWords.empty()) {
-            allWords.pop_back();
-            ngrams.push_back(allWords);
-        }
+        ngrams.push_back(allWordsStream.str());
         return ngrams;
     }
 
+    ngrams.reserve(words.size() - n + 1);
+
     for (size_t i = 0; i <= words.size() - n; ++i) {
-        std::string ngram;
+        std::ostringstream ngramStream;
         for (int j = 0; j < n; ++j) {
-            ngram += words[i + j] + " ";
+            if (j > 0) ngramStream << ' ';
+            ngramStream << words[i + j];
         }
-        // Trim the trailing space and add to ngrams
-        ngram.pop_back();
-        ngrams.push_back(ngram);
+        ngrams.push_back(ngramStream.str());
     }
 
     return ngrams;

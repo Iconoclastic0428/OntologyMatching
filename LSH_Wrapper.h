@@ -1,5 +1,5 @@
 // LSHWrapper.h
-#ifndef LSH_WRAPPER_H
+/*#ifndef LSH_WRAPPER_H
 #define LSH_WRAPPER_H
 
 #include "LSH.h"
@@ -45,3 +45,4 @@ private:
 };
 
 #endif
+*/

@@ -11,7 +11,7 @@ SRC = /home/shl/EntityMatching/main.cpp
 OUT = /home/shl/EntityMatching/EntityMatching
 
 # Libraries
-LIBS = -lcrypto -lhiredis
+LIBS = -lcrypto -ltbb
 
 all: $(OUT)
 

@@ -2,93 +2,94 @@
 #define LSH_H
 
 #include "MinHash.h"
-#include <hiredis/hiredis.h>
 #include <string>
 #include <vector>
 #include <functional>
 #include <sstream>
 #include <iomanip>
 #include <unordered_set>
+#include <map>
+#include <openssl/sha.h>
+#include <tbb/concurrent_unordered_map.h>
+#include <tbb/concurrent_vector.h>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_for_each.h>
+#include <tbb/spin_mutex.h>
 
 class LSH {
 public:
-    LSH(redisContext* context, int numBands, int numHashes = 100)
-        : context(context), numBands(numBands), bandSize(numHashes / numBands) {
+    LSH(int numBands, int numHashes = 100) : numBands(numBands), bandSize(numHashes / numBands), buckets(numBands) {
         for (int i = 0; i < numHashes; ++i) {
             hashFuncs.emplace_back(i); // Initialize HashFunc objects with different seeds
+        }
+        for (int i = 0; i < numBands; ++i) {
+            buckets[i] = tbb::concurrent_unordered_map<std::string, tbb::concurrent_vector<std::string>>();
         }
     }
 
     void insert(const std::vector<std::string>& ngrams, const std::string& docID) {
         auto minhashSignature = minhash(ngrams, hashFuncs);
-
-        // Store signature in Redis
-        for (size_t i = 0; i < minhashSignature.size(); ++i) {
-            redisCommand(context, "HSET signatures:%s %d %lu", docID.c_str(), i, minhashSignature[i]);
-        }
+        signatures[docID] = minhashSignature;
 
         for (int band = 0; band < numBands; ++band) {
             int start = band * bandSize;
             int end = (band + 1) * bandSize;
             std::string bandHash = computeBandHash(minhashSignature, start, end);
 
-            // Store bucket in Redis
-            redisCommand(context, "SADD buckets:%d:%s %s", band, bandHash.c_str(), docID.c_str());
+            buckets[band][bandHash].push_back(docID);
         }
     }
 
-    std::unordered_set<std::string> query(const std::vector<std::string>& queryNgrams, double threshold = 0.5) {
+    std::unordered_set<std::string> query(const std::vector<std::string>& queryNgrams, double threshold = 0.4) {
         auto querySignature = minhash(queryNgrams, hashFuncs);
         std::unordered_set<std::string> candidateDocs;
-        std::unordered_set<std::string> filteredDocs;
-
-        for (int band = 0; band < numBands; ++band) {
+        
+        tbb::parallel_for(0, numBands, [&](int band) {
             int start = band * bandSize;
             int end = (band + 1) * bandSize;
             std::string bandHash = computeBandHash(querySignature, start, end);
-
-            // Fetch candidate documents from Redis
-            redisReply* reply = (redisReply*)redisCommand(context, "SMEMBERS buckets:%d:%s", band, bandHash.c_str());
-            if (reply->type == REDIS_REPLY_ARRAY) {
-                for (size_t i = 0; i < reply->elements; ++i) {
-                    candidateDocs.insert(reply->element[i]->str);
+            
+            auto& bandBucket = buckets[band];
+            if (bandBucket.find(bandHash) != bandBucket.end()) {
+                tbb::spin_mutex::scoped_lock lock;
+                for (const auto& docID : bandBucket[bandHash]) {
+                    lock.acquire(mutex_for_candidateDocs);
+                    candidateDocs.insert(docID);
+                    lock.release();
                 }
             }
-            freeReplyObject(reply);
-        }
+        });
 
-        for (const auto& docID : candidateDocs) {
-            std::vector<unsigned long> docSignature;
-
-            // Fetch document signature from Redis
-            redisReply* reply = (redisReply*)redisCommand(context, "HGETALL signatures:%s", docID.c_str());
-            if (reply->type == REDIS_REPLY_ARRAY) {
-                for (size_t i = 0; i < reply->elements; i += 2) {
-                    unsigned long hashValue = std::stoul(reply->element[i + 1]->str);
-                    docSignature.push_back(hashValue);
-                }
-            }
-            freeReplyObject(reply);
-
+        tbb::concurrent_unordered_map<std::string, bool> filteredDocs;
+        
+        tbb::parallel_for_each(candidateDocs.begin(), candidateDocs.end(), [&](const std::string& docID) {
+            auto& docSignature = signatures.at(docID);
             double similarity = jaccard_similarity(querySignature, docSignature);
             if (similarity >= threshold) {
-                filteredDocs.insert(docID);
+                filteredDocs[docID] = true;
             }
-        }
+        });
 
-        return filteredDocs;
+        std::unordered_set<std::string> result;
+        // Convert concurrent map to set
+        for (auto& item : filteredDocs) {
+            result.insert(item.first);
+        }
+        return result;
     }
 
 private:
-    redisContext* context;
     int numBands;
     int bandSize;
     std::vector<HashFunc> hashFuncs;
+    tbb::concurrent_vector<tbb::concurrent_unordered_map<std::string, tbb::concurrent_vector<std::string>>> buckets;
+    tbb::concurrent_unordered_map<std::string, std::vector<unsigned long>> signatures;
+    tbb::spin_mutex mutex_for_candidateDocs;
 
     std::string computeBandHash(const std::vector<unsigned long>& signature, int start, int end) {
         std::ostringstream oss;
         for (int i = start; i < end; ++i) {
-            oss << std::hex << signature[i];
+            oss << signature[i];
         }
         std::string combined = oss.str();
 

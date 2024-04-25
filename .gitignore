@@ -1,6 +1,5 @@
 .vscode/
 foodon.json
-nourish_public_FoodKG.csv
 EntityMatching
-nourish_public_LexMaOn_FoodKG_Ingredients.csv
-output.txt
+*.txt
+*.csv

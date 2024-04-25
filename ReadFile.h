@@ -120,16 +120,16 @@ std::unordered_map<int, std::vector<std::string>> processChunk(const std::vector
     return localDataMap;
 }
 
-std::unordered_map<int, std::vector<std::string>> processLexMaprChunk(const std::vector<std::string>& lines) {
-    std::unordered_map<int, std::vector<std::string>> lexMap;
+std::unordered_map<std::string, std::vector<std::string>> processLexMaprChunk(const std::vector<std::string>& lines) {
+    std::unordered_map<std::string, std::vector<std::string>> lexMap;
     for (auto& line : lines) {
         std::istringstream lineStream(line);
-        std::string temp, ingredients, component;
-        int recipeID;
+        std::string id, temp, ingredients, component;
+        std::string recipeID;
 
-        std::getline(lineStream, temp, ',');
+        std::getline(lineStream, id, ',');
         bool flag = false;
-        for (char const &c : temp) {
+        for (char const &c : id) {
             if (!std::isdigit(c)) {
                 flag = true;
                 break;
@@ -138,14 +138,14 @@ std::unordered_map<int, std::vector<std::string>> processLexMaprChunk(const std:
         if (flag) {
             continue;
         }
-        recipeID = std::stoi(temp);
+        recipeID = id;
         
         std::getline(lineStream, temp, ',');
         lexMap[recipeID].push_back(temp);
 
         std::getline(lineStream, ingredients);
 
-        std::istringstream ingredientStream(ingredients.substr(1, ingredients.length() - 2)); // Remove surrounding brackets
+        std::istringstream ingredientStream(ingredients.substr(1, ingredients.length() - 3)); // Remove surrounding brackets
         while (std::getline(ingredientStream, component, ',')) {
             // Extract the matching value after the colon, if present
             size_t pos = component.find(":");
@@ -169,10 +169,10 @@ std::unordered_map<int, std::vector<std::string>> processLexMaprChunk(const std:
 }
 
 
-std::unordered_map<int, std::vector<std::string>> processCSV(const std::string& filePath, int mode, size_t linesPerChunk = 1000, size_t numThreads = 12) {
+std::unordered_map<std::string, std::vector<std::string>> processCSV(const std::string& filePath, int mode, size_t linesPerChunk = 1000, size_t numThreads = 12) {
     std::ifstream file(filePath);
 
-    std::vector<std::future<std::unordered_map<int, std::vector<std::string>>>> futures;
+    std::vector<std::future<std::unordered_map<std::string, std::vector<std::string>>>> futures;
 
     ThreadPool pool(numThreads);
     std::vector<std::string> buffer;
@@ -186,10 +186,10 @@ std::unordered_map<int, std::vector<std::string>> processCSV(const std::string& 
 
         if (!buffer.empty()) {
             // std::cout << "Main thread launching a new thread for a chunk" << std::endl;
-            if (mode == 0) {
-                futures.push_back(pool.enqueueTask(processChunk, buffer));
-            }
-            else if (mode == 1) {
+            // if (mode == 0) {
+            //     futures.push_back(pool.enqueueTask(processChunk, buffer));
+            // }
+            if (mode == 1) {
                 futures.push_back(pool.enqueueTask(processLexMaprChunk, buffer));
             }
             buffer.clear();
@@ -201,7 +201,7 @@ std::unordered_map<int, std::vector<std::string>> processCSV(const std::string& 
 
     std::cout << "Finished ingredient chunk processing." << std::endl;
 
-    std::unordered_map<int, std::vector<std::string>> globalDataMap;
+    std::unordered_map<std::string, std::vector<std::string>> globalDataMap;
 
     // Merge local maps from each thread
     for (auto& fut : futures) {

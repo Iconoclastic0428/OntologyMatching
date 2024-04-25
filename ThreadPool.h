@@ -8,6 +8,9 @@
 #include <queue>
 #include <thread>
 #include <vector>
+#include <unordered_map>
+#include <string>
+#include <vector>
 
 class ThreadPool {
 public:
@@ -15,7 +18,7 @@ public:
         for (size_t i = 0; i < numThreads; ++i) {
             workers.emplace_back([this] {
                 while (true) {
-                    std::packaged_task<void()> task;
+                    std::function<void()> task;
 
                     {
                         std::unique_lock<std::mutex> lock(this->queueMutex);
@@ -29,7 +32,7 @@ public:
 
                     task();  // Execute the task
                 }
-                });
+            });
         }
     }
 
@@ -47,13 +50,13 @@ public:
         }
     }
 
-    template<class F, class... Args>
-    auto enqueueTask(F&& f, Args&&... args) -> std::future<decltype(f(args...))> {
-        using return_type = decltype(f(args...));
+    template<typename Func, typename... Args>
+    auto enqueueTask(Func&& func, Args&&... args) -> std::future<decltype(func(args...))> {
+        using return_type = decltype(func(std::forward<Args>(args)...));
 
         auto task = std::make_shared<std::packaged_task<return_type()>>(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-            );
+            std::bind(std::forward<Func>(func), std::forward<Args>(args)...)
+        );
 
         std::future<return_type> res = task->get_future();
         {
@@ -72,7 +75,7 @@ public:
 
 private:
     std::vector<std::thread> workers;
-    std::queue<std::packaged_task<void()>> tasks;  // Change to std::packaged_task<void()>
+    std::queue<std::function<void()>> tasks;
 
     std::mutex queueMutex;
     std::condition_variable condition;

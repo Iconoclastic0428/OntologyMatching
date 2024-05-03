@@ -5,10 +5,10 @@ CXX = /usr/bin/g++
 CXXFLAGS = -fdiagnostics-color=always -g
 
 # Source files
-SRC = /home/shl/EntityMatching/main.cpp
+SRC = ./main.cpp
 
 # Output binary
-OUT = /home/shl/EntityMatching/EntityMatching
+OUT = ./EntityMatching
 
 # Libraries
 LIBS = -lcrypto -ltbb

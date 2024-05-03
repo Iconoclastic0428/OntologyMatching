@@ -6,6 +6,7 @@
 #include <chrono>
 #include <unordered_set>
 #include <future>
+#include <cmath>
 #include <tbb/concurrent_unordered_map.h>
 
 std::unordered_set<std::string> word_set = {"about", "all", "any", "as", "bag", "bell", "bottle", "box", "but", "can", "cans",
@@ -144,16 +145,16 @@ void process_chunk(int thread_id, const std::vector<std::pair<std::string, std::
     std::cout << "Thread " << thread_id << " finished processing " << tasks.size() << " tasks." << std::endl;
 }
 
-int main() {
-    LSH lsh(25);
-    std::string filename = "output.txt";
+void match(std::string ontologyPath, std::string ingredientPath, std::string outputPath, int hash_funcs = 100, int band = 25) {
+    LSH lsh(band, hash_funcs);
+    std::string filename = outputPath;
     std::unordered_map<std::string, std::pair<std::string, std::string>> index;
     int n = 3;
     tbb::concurrent_unordered_map<std::string, std::unordered_set<std::string>> cache;
 
-    json json = process_json("./foodon.json");
+    json json = process_json(ontologyPath);
     // std::unordered_map<int, std::vector<std::string>> ingredients = processCSV("./nourish_public_FoodKG.csv", 0);
-    std::unordered_map<std::string, std::vector<std::string>> lexMaprIngredients = processCSV("./nourish_public_LexMaOn_FoodKG_Ingredients.csv", 1);
+    std::unordered_map<std::string, std::vector<std::string>> lexMaprIngredients = processCSV(ingredientPath, 1);
     std::unordered_map<std::string, std::unordered_set<std::string>> possible_matches;
     std::unordered_map<std::string, std::string> ingredients;
     for (auto& [key, value] : lexMaprIngredients) {
@@ -163,7 +164,7 @@ int main() {
     lexMaprIngredients.clear();
     std::vector<std::string> ontologies = parseJson(json, index, inverted_index);
 
-    const size_t max_concurrent_tasks = 10;
+    const size_t max_concurrent_tasks = std::thread::hardware_concurrency();
     std::vector<std::thread> threads;
 
     auto it = ingredients.begin();
@@ -227,30 +228,30 @@ int main() {
     
     std::cout << "The total time taken is " << hours << "h" << minutes << "m" << seconds << "s\n";
 
-    std::ofstream outFile("ngrams.txt");
+    std::ofstream outFile("output.txt");
 
     if (!outFile.is_open()) {
         std::cerr << "Failed to open " << filename << std::endl;
-        return -1;
+        return;
     }
 
-    for (auto& [key, value] : ingredients) {
-        outFile << key << std::endl;
-        auto filtered_string = filter_string(value);
-        auto words = text_to_ngrams_words(filtered_string, 2);
+    // for (auto& [key, value] : ingredients) {
+    //     outFile << key << std::endl;
+    //     auto filtered_string = filter_string(value);
+    //     auto words = text_to_ngrams_words(filtered_string, 2);
 
-        for (auto& w : words) {
-            outFile << w << std::endl;
-        }
+    //     for (auto& w : words) {
+    //         outFile << w << std::endl;
+    //     }
 
-        auto word_single = text_to_ngrams_words(filtered_string, 1);
-        for (auto& w : word_single) {
-            outFile << w << std::endl;
-        }
+    //     auto word_single = text_to_ngrams_words(filtered_string, 1);
+    //     for (auto& w : word_single) {
+    //         outFile << w << std::endl;
+    //     }
 
-        outFile << "------------------\n";
+    //     outFile << "------------------\n";
 
-    }
+    // }
 
     // for (auto& [key, value] : ingredients_matches) {
     //     outFile << key << std::endl;
@@ -260,7 +261,33 @@ int main() {
     //     outFile << "-------------------\n";
     // }
 
-    outFile.close();
+    // outFile.close();
+
+    std::unordered_map<std::string, std::unordered_set<std::string>> matches;
+    for (auto& [key, value] : ingredients_matches) {
+        if (inverted_index_multiple.find(key) != inverted_index_multiple.end()) {
+            auto lst = inverted_index_multiple[key];
+            for (auto& element : lst) {
+                matches[element].insert(value.begin(), value.end());
+            }
+        }
+        else if (inverted_index_single.find(key) != inverted_index_single.end()) {
+            auto lst = inverted_index_single[key];
+            for (auto& element : lst) {
+                matches[element].insert(value.begin(), value.end());
+            }
+        }
+    }
+
+    std::cout << "Finish matching\n";
+
+    for (auto& [key, value] : matches) {
+        outFile << key << std::endl;
+        for (auto& v : value) {
+            outFile << "(" << index[v].first << ", " << index[v].second << ")\n";
+        }
+        outFile << "-----------------\n";
+    }
 
     std::cout << "Finish writing matches\n";
 
@@ -330,4 +357,12 @@ int main() {
     // for (auto& res : set) {
     //     std::cout << "(" << index[res].first << "," << index[res].second << ")" << std::endl;
     // } 
+}
+
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        std::cout << "Usage: ./EntityMatching [path_to_ontology] [path_to_candiates] [path_to_output]\n";
+        return -1;
+    }
+    match(argv[0], argv[1], argv[2]);
 }

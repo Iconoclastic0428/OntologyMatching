@@ -228,7 +228,7 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
     
     std::cout << "The total time taken is " << hours << "h" << minutes << "m" << seconds << "s\n";
 
-    std::ofstream outFile("output.txt");
+    std::ofstream outFile(filename);
 
     if (!outFile.is_open()) {
         std::cerr << "Failed to open " << filename << std::endl;

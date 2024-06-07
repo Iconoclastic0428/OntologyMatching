@@ -3,3 +3,5 @@ foodon.json
 EntityMatching
 *.txt
 *.csv
+build/
+*.bin

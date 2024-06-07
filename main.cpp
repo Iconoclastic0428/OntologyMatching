@@ -293,7 +293,7 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
     for (auto& [key, value] : matches) {
         outFile << key << std::endl;
         for (auto& v : value) {
-            outFile << "(" << index[v].first << ", " << index[v].second << "), ";
+            outFile << "(" << index[v].first << " " << index[v].second << "), ";
         }
         outFile << "\n";
     }

@@ -106,13 +106,13 @@ def get_json(ontology, output_file):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
+    if len(sys.argv) != 3:
         print('Usage: python3 ./ProcessOntology.py [ontology file] [output file]')
         raise RuntimeError('Invalid input.')
-    input_file = sys.argv[0]
+    input_file = sys.argv[1]
     output_file = 'parsed_ontology.owl'
     remove_rdf_datatype(input_file, output_file)
-    get_json(output_file, sys.argv[1])
+    get_json(output_file, sys.argv[2])
 
 
 

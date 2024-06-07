@@ -360,9 +360,9 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
 }
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
+    if (argc != 4) {
         std::cout << "Usage: ./EntityMatching [path_to_ontology] [path_to_candiates] [path_to_output]\n";
         return -1;
     }
-    match(argv[0], argv[1], argv[2]);
+    match(argv[1], argv[2], argv[3]);
 }

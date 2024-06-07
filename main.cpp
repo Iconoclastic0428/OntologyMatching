@@ -3,6 +3,7 @@
 #include "ReadFile.h"
 #include "NGram.h"
 #include "Memory_Usage.h"
+#include "util.h"
 #include <chrono>
 #include <unordered_set>
 #include <future>
@@ -164,7 +165,7 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
     lexMaprIngredients.clear();
     std::vector<std::string> ontologies = parseJson(json, index, inverted_index);
 
-    const size_t max_concurrent_tasks = std::thread::hardware_concurrency();
+    const size_t max_concurrent_tasks = std::min(std::thread::hardware_concurrency(), static_cast<unsigned int>(ingredients.size()));
     std::vector<std::thread> threads;
 
     auto it = ingredients.begin();
@@ -185,10 +186,18 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
 
     print_memory_usage();
 
-    for (int i = 0; i < ontologies.size(); ++i) {
-        lsh.insert(text_to_ngrams(ontologies[i], n), ontologies[i]);
+    std::string bin_filename = get_base_filename(ontologyPath) + ".bin";
+    if (file_exists(bin_filename)) {
+        lsh.load_from_disk(bin_filename);
+    }
+    else {
+        for (int i = 0; i < ontologies.size(); ++i) {
+            lsh.insert(text_to_ngrams(ontologies[i], n), ontologies[i]);
+        }
+        lsh.save_to_disk(bin_filename);
     }
 
+    
     std::cout << "Finish inserting ontologites\n";
     
     std::vector<std::pair<std::string, std::string>> tasks;
@@ -284,9 +293,9 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
     for (auto& [key, value] : matches) {
         outFile << key << std::endl;
         for (auto& v : value) {
-            outFile << "(" << index[v].first << ", " << index[v].second << ")\n";
+            outFile << "(" << index[v].first << ", " << index[v].second << "), ";
         }
-        outFile << "-----------------\n";
+        outFile << "\n";
     }
 
     std::cout << "Finish writing matches\n";

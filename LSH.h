@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <unordered_set>
 #include <map>
+#include <fstream>
 #include <openssl/sha.h>
 #include <tbb/concurrent_unordered_map.h>
 #include <tbb/concurrent_vector.h>
@@ -76,6 +77,118 @@ public:
             result.insert(item.first);
         }
         return result;
+    }
+
+    void save_to_disk(const std::string& filename) const {
+        std::ofstream outFile(filename, std::ios::binary);
+
+        if (!outFile.is_open()) {
+            std::cerr << "Failed to open file: " << filename << std::endl;
+            return;
+        }
+
+        // Serialize number of bands and band size
+        outFile.write(reinterpret_cast<const char*>(&numBands), sizeof(numBands));
+        outFile.write(reinterpret_cast<const char*>(&bandSize), sizeof(bandSize));
+
+        // Serialize buckets
+        for (int i = 0; i < numBands; ++i) {
+            auto& bandBucket = buckets[i];
+            size_t bucketSize = bandBucket.size();
+            outFile.write(reinterpret_cast<const char*>(&bucketSize), sizeof(bucketSize));
+            
+            for (const auto& [key, value] : bandBucket) {
+                size_t keySize = key.size();
+                outFile.write(reinterpret_cast<const char*>(&keySize), sizeof(keySize));
+                outFile.write(key.c_str(), keySize);
+
+                size_t valueSize = value.size();
+                outFile.write(reinterpret_cast<const char*>(&valueSize), sizeof(valueSize));
+                for (const auto& docID : value) {
+                    size_t docIDSize = docID.size();
+                    outFile.write(reinterpret_cast<const char*>(&docIDSize), sizeof(docIDSize));
+                    outFile.write(docID.c_str(), docIDSize);
+                }
+            }
+        }
+
+        // Serialize signatures
+        size_t sigSize = signatures.size();
+        outFile.write(reinterpret_cast<const char*>(&sigSize), sizeof(sigSize));
+
+        for (const auto& [docID, signature] : signatures) {
+            size_t docIDSize = docID.size();
+            outFile.write(reinterpret_cast<const char*>(&docIDSize), sizeof(docIDSize));
+            outFile.write(docID.c_str(), docIDSize);
+
+            size_t sigVecSize = signature.size();
+            outFile.write(reinterpret_cast<const char*>(&sigVecSize), sizeof(sigVecSize));
+            outFile.write(reinterpret_cast<const char*>(signature.data()), sigVecSize * sizeof(unsigned long));
+        }
+
+        outFile.close();
+    }
+
+    // Load the LSH data from a file
+    void load_from_disk(const std::string& filename) {
+        std::ifstream inFile(filename, std::ios::binary);
+
+        if (!inFile.is_open()) {
+            std::cerr << "Failed to open file: " << filename << std::endl;
+            return;
+        }
+
+        // Deserialize number of bands and band size
+        inFile.read(reinterpret_cast<char*>(&numBands), sizeof(numBands));
+        inFile.read(reinterpret_cast<char*>(&bandSize), sizeof(bandSize));
+
+        // Deserialize buckets
+        buckets.resize(numBands);
+        for (int i = 0; i < numBands; ++i) {
+            size_t bucketSize;
+            inFile.read(reinterpret_cast<char*>(&bucketSize), sizeof(bucketSize));
+
+            for (size_t j = 0; j < bucketSize; ++j) {
+                size_t keySize;
+                inFile.read(reinterpret_cast<char*>(&keySize), sizeof(keySize));
+                std::string key(keySize, '\0');
+                inFile.read(&key[0], keySize);
+
+                size_t valueSize;
+                inFile.read(reinterpret_cast<char*>(&valueSize), sizeof(valueSize));
+                tbb::concurrent_vector<std::string> value(valueSize);
+
+                for (size_t k = 0; k < valueSize; ++k) {
+                    size_t docIDSize;
+                    inFile.read(reinterpret_cast<char*>(&docIDSize), sizeof(docIDSize));
+                    std::string docID(docIDSize, '\0');
+                    inFile.read(&docID[0], docIDSize);
+                    value[k] = docID;
+                }
+
+                buckets[i][key] = value;
+            }
+        }
+
+        // Deserialize signatures
+        size_t sigSize;
+        inFile.read(reinterpret_cast<char*>(&sigSize), sizeof(sigSize));
+
+        for (size_t i = 0; i < sigSize; ++i) {
+            size_t docIDSize;
+            inFile.read(reinterpret_cast<char*>(&docIDSize), sizeof(docIDSize));
+            std::string docID(docIDSize, '\0');
+            inFile.read(&docID[0], docIDSize);
+
+            size_t sigVecSize;
+            inFile.read(reinterpret_cast<char*>(&sigVecSize), sizeof(sigVecSize));
+            std::vector<unsigned long> signature(sigVecSize);
+            inFile.read(reinterpret_cast<char*>(signature.data()), sigVecSize * sizeof(unsigned long));
+
+            signatures[docID] = signature;
+        }
+
+        inFile.close();
     }
 
 private:

@@ -10,14 +10,11 @@
 #include <cmath>
 #include <tbb/concurrent_unordered_map.h>
 
-std::unordered_set<std::string> word_set = {"about", "all", "any", "as", "bag", "bell", "bottle", "box", "but", "can", "cans",
-                                            "choice", "coarsely", "cubes", "cut", "dry", "extra", "fine", "finely",
-                                            "for", "free", "freshly", "from", "good", "grams", "i", "if", "in", "inch",
-                                            "into", "is", "jar", "lbs", "like", "more", "none", "not", "of", "on", "one",
-                                            "optional", "other", "ounce", "ounces", "pieces", "pinch", "plain", "plus",
-                                            "possibly", "pound", "pounds", "removed", "size", "slices", "stock", "such", "sweet",
-                                            "t", "tablespoon", "tablespoons", "taste", "teaspoons", "the", "thick", "thin", "thinly",
-                                            "to", "up", "use", "very", "weight", "with", "you", "your"};
+std::unordered_set<std::string> word_set = {"about", "all", "any", "as", "but", "can",
+                                            "choice", "extra", "for", "free", "from", "good", "i", "if", "in", "inch",
+                                            "into", "is", "like", "more", "none", "not", "of", "on", "one",
+                                            "optional", "other", "pieces", "plus", "possibly", "removed", "size", "such",
+                                            "the", "to", "up", "use", "very", "weight", "with", "you", "your"};
 std::queue<std::pair<std::string, std::vector<std::string>>> tasks;
 tbb::concurrent_unordered_map<std::string, std::string> inverted_index;
 tbb::concurrent_unordered_map<std::string, std::unordered_set<std::string>> cache;
@@ -90,7 +87,6 @@ void process_chunk_words(
         inverted_index_single[key].insert(value.begin(), value.end());
     }
     local_index_single.clear();
-    std::cout << "Thread " << thread_id << " finished processing " << completed_tasks << " tasks." << std::endl;
 }
 
 void process_chunk(int thread_id, const std::vector<std::pair<std::string, std::string>>& tasks,
@@ -101,18 +97,7 @@ void process_chunk(int thread_id, const std::vector<std::pair<std::string, std::
     for (int i = 0; i < tasks.size(); ++i) {
         const auto& task = tasks[i];
         auto key = std::get<0>(task);
-        // auto query_ngram = text_to_ngrams_words(key, 2);
         std::unordered_set<std::string> set;
-        // for (auto& ngram : query_ngram) {
-        //     if (cache.find(ngram) != cache.end()) {
-        //         set.insert(cache[ngram].begin(), cache[ngram].end());
-        //     }
-        //     else {
-        //         auto candidates = lsh.query(text_to_ngrams(ngram, n), 0.5);
-        //         set.insert(candidates.begin(), candidates.end());
-        //         cache[ngram].insert(candidates.begin(), candidates.end());
-        //     }
-        // }
         auto indicator = std::get<1>(task);
         if (indicator == "single") {
             auto candidates = lsh.query(text_to_ngrams(key, n), 0.9);
@@ -122,28 +107,15 @@ void process_chunk(int thread_id, const std::vector<std::pair<std::string, std::
             auto candidates = lsh.query(text_to_ngrams(key, n), 0.5);
             set.insert(candidates.begin(), candidates.end());
         }
-        
-        // for (auto& match : matches) {
-        //     if (set.find(inverted_index[match]) == set.end()) {
-        //         local_mismatch[key].insert(inverted_index[match]);
-        //     }
-        // }
 
         local_ingredients_matches[key].insert(set.begin(), set.end());
 
         completedTasks++;
-        if (completedTasks % 10000 == 0) {
-            std::cout << completedTasks << "th task completed on thread " << thread_id << std::endl;
-        }
     }
-    // std::lock_guard<std::mutex> lock(mutex);
-    // for (auto& pair : local_mismatch) {
-    //     mismatch[pair.first].insert(pair.second.begin(), pair.second.end());
-    // }
+
     for (auto& pair : local_ingredients_matches) {
         ingredients_matches[pair.first].insert(pair.second.begin(), pair.second.end());
     }
-    std::cout << "Thread " << thread_id << " finished processing " << tasks.size() << " tasks." << std::endl;
 }
 
 void match(std::string ontologyPath, std::string ingredientPath, std::string outputPath, int hash_funcs = 100, int band = 25) {
@@ -154,7 +126,6 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
     tbb::concurrent_unordered_map<std::string, std::unordered_set<std::string>> cache;
 
     json json = process_json(ontologyPath);
-    // std::unordered_map<int, std::vector<std::string>> ingredients = processCSV("./nourish_public_FoodKG.csv", 0);
     std::unordered_map<std::string, std::vector<std::string>> lexMaprIngredients = processCSV(ingredientPath, 1);
     std::unordered_map<std::string, std::unordered_set<std::string>> possible_matches;
     std::unordered_map<std::string, std::string> ingredients;
@@ -181,11 +152,6 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
         t.join();
     }
 
-    std::cout << "Finish creating inverted index of multiple ngram size: " << 
-    inverted_index_multiple.size() << ", single ngram size: " << inverted_index_single.size() << std::endl;
-
-    print_memory_usage();
-
     std::string bin_filename = get_base_filename(ontologyPath) + ".bin";
     if (file_exists(bin_filename)) {
         lsh.load_from_disk(bin_filename);
@@ -196,9 +162,6 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
         }
         lsh.save_to_disk(bin_filename);
     }
-
-    
-    std::cout << "Finish inserting ontologites\n";
     
     std::vector<std::pair<std::string, std::string>> tasks;
     
@@ -235,42 +198,12 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
     int minutes = (total_seconds % 3600) / 60;
     int seconds = total_seconds % 60;
     
-    std::cout << "The total time taken is " << hours << "h" << minutes << "m" << seconds << "s\n";
-
     std::ofstream outFile(filename);
 
     if (!outFile.is_open()) {
         std::cerr << "Failed to open " << filename << std::endl;
         return;
     }
-
-    // for (auto& [key, value] : ingredients) {
-    //     outFile << key << std::endl;
-    //     auto filtered_string = filter_string(value);
-    //     auto words = text_to_ngrams_words(filtered_string, 2);
-
-    //     for (auto& w : words) {
-    //         outFile << w << std::endl;
-    //     }
-
-    //     auto word_single = text_to_ngrams_words(filtered_string, 1);
-    //     for (auto& w : word_single) {
-    //         outFile << w << std::endl;
-    //     }
-
-    //     outFile << "------------------\n";
-
-    // }
-
-    // for (auto& [key, value] : ingredients_matches) {
-    //     outFile << key << std::endl;
-    //     for (auto& v : value) {
-    //         outFile << "(" << index[v].first << ", " << index[v].second << ")\n";
-    //     }
-    //     outFile << "-------------------\n";
-    // }
-
-    // outFile.close();
 
     std::unordered_map<std::string, std::unordered_set<std::string>> matches;
     for (auto& [key, value] : ingredients_matches) {
@@ -288,8 +221,6 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
         }
     }
 
-    std::cout << "Finish matching\n";
-
     for (auto& [key, value] : matches) {
         outFile << key << std::endl;
         for (auto& v : value) {
@@ -298,74 +229,6 @@ void match(std::string ontologyPath, std::string ingredientPath, std::string out
         outFile << "\n";
     }
 
-    std::cout << "Finish writing matches\n";
-
-    // inverted_index_multiple.insert(inverted_index_single.begin(), inverted_index_multiple.end());
-
-    // inverted_index_single.clear();
-
-    // for (auto& [key, value] : ingredients_matches) {
-    //     auto& indexes = inverted_index_multiple[key];
-
-    //     for (auto& match : value) {
-    //         for (auto& i : indexes) {
-    //             // matches[i].insert(match);
-    //             if (possible_matches[i].find(index[match].first) != possible_matches[i].end()) {
-    //                 possible_matches[i].erase(index[match].first);
-    //             }
-    //         }
-    //     }
-    // }
-
-    // std::cout << "Finish matching\n";
-
-    // std::ofstream mismatchFile("mismatches.txt");
-
-    // if (!mismatchFile.is_open()) {
-    //     std::cerr << "Failed to open " << filename << std::endl;
-    //     return -1;
-    // }
-
-    // for (const auto& mapEntry : possible_matches) {
-    //     std::string key = mapEntry.first;
-    //     const auto& setValue = mapEntry.second;
-
-    //     mismatchFile << key << std::endl;
-
-    //     for (const auto& setEntry : setValue) {
-    //         if (inverted_index.find(setEntry) == inverted_index.end())
-    //             mismatchFile << setEntry << std::endl;
-    //         else
-    //             mismatchFile << "(" << index[inverted_index[setEntry]].first << ", " << index[inverted_index[setEntry]].second << ")" << std::endl;
-    //     }
-
-    //     // outFile << "--------matches-----------\n";
-
-    //     // const auto mes = matches[key];
-
-    //     // for (const auto& entry: mes) {
-    //     //     outFile << "(" << index[entry].first << ", " << index[entry].second << ")" << std::endl;
-    //     // }
-
-    //     mismatchFile << "------------------------------\n";
-    // }
-
-    
-    // std::string customInput = "Yeast Rolls \'{\"3 1/2 c. all-purpose flour\" \"1/4 c. sugar\" \"1/4 c. butter or 1 stick margarine softened\" \"1 tsp. salt\" \"1 pkg. regular or quick active dry yeast (2 1/4 tsp.)\" \"1/2 c. very warm water (120~ to 130~)\" \"1/2 c. very warm milk (120~ to 130~)\" \"1 large egg\" \"butter or margarine melted (if desired)\"}\'";
-    // auto query_ngram = text_to_ngrams_words(filter_string(customInput), 2);
-    // std::unordered_set<std::string> set;
-    // // for (auto& ngram : query_ngram) {
-    // //     auto candidates = lsh.query(text_to_ngrams(ngram, n), 0.4);
-    // //     set.merge(candidates);
-    // // }
-    // auto query_ngram_single = text_to_ngrams_words(filter_string(customInput), 1);
-    // for (auto& ngram : query_ngram_single) {
-    //     auto candidates = lsh.query(text_to_ngrams(ngram, n), 0.9);
-    //     set.merge(candidates);
-    // }
-    // for (auto& res : set) {
-    //     std::cout << "(" << index[res].first << "," << index[res].second << ")" << std::endl;
-    // } 
 }
 
 int main(int argc, char** argv) {

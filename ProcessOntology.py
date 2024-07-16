@@ -4,7 +4,6 @@
 from owlready2 import *
 import re
 import json
-from collections import defaultdict
 import sys
 
 def remove_rdf_datatype(input_file, output_file=None):
@@ -68,7 +67,8 @@ def process_val(lst):
     return list(res)
     
 def get_json(ontology, output_file):
-    word_list = ['efsa', 'foodex2', 'food', 'product']
+    word_list = []
+    # word_list = ['efsa', 'foodex2', 'food', 'product']
     onto = get_ontology(ontology).load()
     classes = {}
     exceptedClasses = set()
@@ -79,14 +79,6 @@ def get_json(ontology, output_file):
             classes[cls.name] = cls.label
         else:
             exceptedClasses.add(cls)
-        # except ValueError as e:
-        #     # Check if the error is due to the unsupported datatype, if this happens, 
-        #     # change the remove_rdf_datatype
-        #     if "Cannot read literal of datatype 371" in str(e):
-        #         # print(f"Encountered an unsupported datatype in class {cls.name}")
-        #         exceptedClasses.add(cls)
-        #     else:
-        #         raise
         i += 1
         if i % 1000 == 0:
             print(f"this is the {i}th iter.")
@@ -113,7 +105,3 @@ if __name__ == '__main__':
     output_file = 'parsed_ontology.owl'
     remove_rdf_datatype(input_file, output_file)
     get_json(output_file, sys.argv[2])
-
-
-
-

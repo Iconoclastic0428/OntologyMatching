@@ -104,11 +104,11 @@ print(results[0])
 # Visualization
 
 To visualize our performance and its comparison to LexMapr `[@lexmapr]`, a ontological mapper. We illustrate the performance of our LSH-based ontology matching system compared to LexMapr in terms of precision, recall, processing time, and the number of unmatched items.
-![comparison](./LexMapr%20Comparison.png)
+![comparison](./LexMapr%20Comparison.jpg)
 The graph on the left shows the processing time in seconds for different band settings. There is a noticeable increase in time as the number of bands increases, with a sharp rise at 40 bands. This suggests a trade-off between accuracy and processing time. The graph on the right displays the number of matches that our system found but were not present in LexMapr's results. Our system consistently finds additional matches across different band settings, highlighting an improved performance in identifying relevant ontology matches.
 
 The second graph shows the precision and recall of our system at different band settings for a threshold of 0.5.
-![F1](./precision%20and%20recall.png)
+![F1](./precision%20and%20recall.jpg)
 
 # Conclusion
 We developed an efficient LSH-based ontology matching system that significantly improves the classification of food ingredients into ontology entities, addressing limitations in existing methods such as LexMapr. This project demonstrates the enhanced precision and recall, as well as the ability to discover additional relevant matches, providing robust and accurate results. Our approach balances accuracy and processing time, ensuring practical applicability in large-scale data environments. Details of usage can be found at (https://github.com/Iconoclastic0428/OntologyMatching)

@@ -28,7 +28,7 @@ Data similarity is essential in data mining and machine learning, especially for
 
 Recent advancements, such as the introduction of practical and optimal Locality-Sensitive Hashing (LSH) for angular distance `[@andoni2015practical]`, have shown that efficient similarity computation can greatly improve performance in high-dimensional spaces. Ontology matching techniques leveraging word embeddings `[@zhang2014ontology]` and large-scale ontology alignment `[@diallo2014effective]` have demonstrated that integrating deep learning and knowledge rules `[@khoudja2022deep]` can significantly enhance matching accuracy. Additionally, methods like biomedical ontology matching using attention-based bidirectional long short-term memory networks `[@hao2021medto; @zhu2022integrating]` have set new benchmarks for precision in complex datasets.
 
-To address these challenges, we developed the ![LSH Ontology Matching software](https://github.com/Iconoclastic0428/OntologyMatching), which uses hash functions to efficiently group similar items, reducing computational complexity. This tool handles large-scale datasets, offering robust solutions for ontology matching and similarity searches, and includes features for constructing and querying LSH mappings.
+To address these challenges, we developed the LSH Ontology Matching software(https://github.com/Iconoclastic0428/OntologyMatching), which uses hash functions to efficiently group similar items, reducing computational complexity. This tool handles large-scale datasets, offering robust solutions for ontology matching and similarity searches, and includes features for constructing and querying LSH mappings.
 
 # Statement of Need
 

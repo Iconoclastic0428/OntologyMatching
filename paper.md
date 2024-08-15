@@ -1,10 +1,16 @@
 ---
-title: 'LSH Ontology Matching'
+title: 'Parallel LSH Ontology Matching'
+
+tags: 
+  - C++
+  - Python
+  - database
+  - ontology
 
 authors:
 
   - name: Shengqi Li
-    orcid: 
+    orcid: 0009-0008-0421-0677
     affiliation: 1
 
   - name: Kai Lin

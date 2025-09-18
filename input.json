@@ -1,0 +1,24 @@
+{
+    "expansions": {
+      "1022551": [
+        "1/2 ounce butterscotch schnapps",
+        "1/2 ounce Baileys Irish Cream"
+      ],
+      "1242989": [
+        "1/2 cup vegetable oil",
+        "3/4 cup all-purpose flour",
+        "1 teaspoon salt",
+        "1 teaspoon ground black pepper",
+        "4 cups milk",
+        "3 cups milk",
+        "1 cup chicken broth",
+        "1 cup beef broth"
+      ]
+    },
+    "n": 3,
+    "band": 25,
+    "hash_funcs": 100,
+    "thresh_single": 0.9,
+    "thresh_multi": 0.5
+  }
+  

@@ -1,0 +1,39 @@
+{
+  "1242989": [
+    {
+      "id": "FOODON_03305263",
+      "label": "vegetable oil",
+      "score": 1.0
+    },
+    {
+      "id": "FOODON_03480021",
+      "label": "packed in vegetable oil",
+      "score": 1.0
+    },
+    {
+      "id": "FOODON_03303004",
+      "label": "chicken broth",
+      "score": 1.0
+    },
+    {
+      "id": "FOODON_00003816",
+      "label": "vegetable",
+      "score": 1.0
+    },
+    {
+      "id": "FOODON_03302091",
+      "label": "beef broth",
+      "score": 1.0
+    },
+    {
+      "id": "FOODON_03306739",
+      "label": "black pepper (ground)",
+      "score": 1.0
+    },
+    {
+      "id": "FOODON_03400700",
+      "label": "10  vegetable oils (efg)",
+      "score": 1.0
+    }
+  ]
+}

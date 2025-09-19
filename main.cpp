@@ -80,6 +80,21 @@ struct BuiltOntology {
     // key used by LSH is a normalized string (whatever parseJson produced)
     std::unordered_map<std::string, std::pair<std::string, std::string>> index;
 
+    // ===== New: build from in-memory JSON (no disk IO) =====
+    BuiltOntology(const json& ontology_json, int band=25, int hash_funcs=100, int n_grams=3)
+    : lsh(band, hash_funcs), n(n_grams)
+    {
+        json j = ontology_json;
+        tbb::concurrent_unordered_map<std::string, std::string> dummy_inverted_index;
+        std::vector<std::string> ontos = parseJson(j, index, dummy_inverted_index);
+        for (const auto& s : ontos) {
+            lsh.insert(text_to_ngrams(s, n), s);  // index with character n-grams
+        }
+    }
+
+    // ===== Original: build from file path + on-disk cache =====
+    // (Kept for later use, currently unused.)
+    
     BuiltOntology(const std::string& ontologyPath, int band=25, int hash_funcs=100, int n_grams=3)
     : lsh(band, hash_funcs), n(n_grams)
     {
@@ -98,6 +113,7 @@ struct BuiltOntology {
             lsh.save_to_disk(bin_filename);
         }
     }
+    
 };
 
 // ---------------------- In-memory matching APIs ----------------------
@@ -122,7 +138,7 @@ match_terms_in_memory(BuiltOntology& BO,
             const std::string norm = join_filtered_tokens(filtered);
             const double thr = looks_single_token(term) ? thresh_single : thresh_multi;
             auto grams = text_to_ngrams(norm, BO.n);
-            auto cand  = BO.lsh.query(grams, thr);  // vector<string> normalized ontology strings (unordered_set)
+            auto cand  = BO.lsh.query(grams, thr);  // vector<string> normalized ontology strings
 
             std::vector<Match> matches;
             matches.reserve(cand.size());
@@ -232,6 +248,8 @@ static json matches_to_json(const std::unordered_map<std::string, std::vector<Ma
 
 // ---------------------- Original file-driven matching (preserved) ----------------------
 
+// (Kept for later; currently unused here.)
+/*
 void match_file_mode(const std::string& ontologyPath,
                      const std::string& ingredientPath,
                      const std::string& outputPath,
@@ -244,7 +262,7 @@ void match_file_mode(const std::string& ontologyPath,
 
     // Load candidate rows: processCSV returns map key -> vector<string>
     // where vector[0] is the main string, vector[1..] are expansions / possibles
-    std::unordered_map<std::string, std::vector<std::string>> csv = processCSV(ingredientPath, /*minCols*/1);
+    std::unordered_map<std::string, std::vector<std::string>> csv = processCSV(ingredientPath, 1);
 
     // Build an "expansions" map keyed by candidate key.
     std::unordered_map<std::string, std::vector<std::string>> expansions;
@@ -260,7 +278,7 @@ void match_file_mode(const std::string& ontologyPath,
     }
 
     // Run in-memory matching over all variants and union back per key
-    auto grouped = match_terms_with_expansions_in_memory(BO, expansions, /*thresh_single=*/0.90, /*thresh_multi=*/0.50);
+    auto grouped = match_terms_with_expansions_in_memory(BO, expansions, 0.90, 0.50);
 
     // Write text output to match your previous format
     std::ofstream out(outputPath);
@@ -280,29 +298,96 @@ void match_file_mode(const std::string& ontologyPath,
     auto secs = std::chrono::duration_cast<std::chrono::seconds>(t1 - t0).count();
     std::cerr << "Finished file mode in " << secs << "s\n";
 }
+*/
 
 // ---------------------- JSON (stdin/stdout) in-memory mode ----------------------
 
 static void usage() {
     std::cerr <<
-        "Usage:\n"
-        "  A) File mode (original):\n"
-        "     ./EntityMatching <ontology.json> <candidates.csv> <output.txt>\n"
-        "  B) JSON mode (new, stdin->stdout):\n"
-        "     ./EntityMatching --json <ontology.json> < options.json > results.json\n\n"
-        "  options.json schema (one of):\n"
-        "    {\"terms\": [\"t1\",\"t2\"], \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
-        "     \"thresh_single\":0.9, \"thresh_multi\":0.5}\n\n"
-        "    {\"expansions\": {\"key\":[\"v1\",\"v2\"]},\n"
-        "     \"n\":3, \"band\":25, \"hash_funcs\":100, \"thresh_single\":0.9, \"thresh_multi\":0.5}\n";
+        "Usage (JSON-in/JSON-out via stdin/stdout):\n"
+        "  echo '{\n"
+        "    \"ontology\": { /* ontology JSON */ },\n"
+        "    \"terms\": [\"t1\",\"t2\"],\n"
+        "    \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
+        "    \"thresh_single\":0.9, \"thresh_multi\":0.5\n"
+        "  }' | ./EntityMatching > results.json\n\n"
+        "Or with expansions:\n"
+        "  {\n"
+        "    \"ontology\": { /* ontology JSON */ },\n"
+        "    \"expansions\": {\"key\":[\"v1\",\"v2\"]},\n"
+        "    \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
+        "    \"thresh_single\":0.9, \"thresh_multi\":0.5\n"
+        "  }\n"
+        ;
 }
 
 int main(int argc, char** argv) {
-    // Mode B: JSON over stdin/stdout
+    if (argc != 2) {
+        std::cerr <<
+          "Usage:\n"
+          "  ./EntityMatching <ontology.json> < request.json > results.json\n\n"
+          "request.json schema (one of):\n"
+          "  {\"terms\":[\"t1\",\"t2\"], \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
+          "   \"thresh_single\":0.9, \"thresh_multi\":0.5}\n\n"
+          "  {\"expansions\": {\"key\":[\"v1\",\"v2\"]}, \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
+          "   \"thresh_single\":0.9, \"thresh_multi\":0.5}\n";
+        return 1;
+    }
+
+    const std::string ontologyPath = argv[1];
+
+    // Read all of stdin into a string
+    std::istreambuf_iterator<char> begin(std::cin), end;
+    std::string payload(begin, end);
+    if (payload.empty()) {
+        std::cerr << "Error: no JSON provided on stdin.\n";
+        return 2;
+    }
+
+    nlohmann::json cfg;
+    try {
+        cfg = nlohmann::json::parse(payload);
+    } catch (const std::exception& e) {
+        std::cerr << "Error parsing JSON: " << e.what() << "\n";
+        return 2;
+    }
+
+    const int n          = cfg.value("n", 3);
+    const int band       = cfg.value("band", 25);
+    const int hash_funcs = cfg.value("hash_funcs", 100);
+    const double ts      = cfg.value("thresh_single", 0.90);
+    const double tm      = cfg.value("thresh_multi", 0.50);
+
+    // Build from ontology file (uses .bin cache if present)
+    BuiltOntology BO(ontologyPath, band, hash_funcs, n);
+
+    nlohmann::json out;
+    if (cfg.contains("terms")) {
+        std::vector<std::string> terms = cfg["terms"].get<std::vector<std::string>>();
+        auto res = match_terms_in_memory(BO, terms, ts, tm);
+        out = matches_to_json(res);
+    } else if (cfg.contains("expansions")) {
+        std::unordered_map<std::string, std::vector<std::string>> expansions;
+        for (auto it = cfg["expansions"].begin(); it != cfg["expansions"].end(); ++it) {
+            expansions[it.key()] = it.value().get<std::vector<std::string>>();
+        }
+        auto res = match_terms_with_expansions_in_memory(BO, expansions, ts, tm);
+        out = matches_to_json(res);
+    } else {
+        std::cerr << "JSON must contain either \"terms\" or \"expansions\".\n";
+        return 2;
+    }
+
+    std::cout << out.dump(2) << std::endl;
+    return 0;
+
+
+    // ===== Old modes retained but commented out for now =====
+    /*
+    // Mode B (old): --json <ontology.json> + options on stdin
     if (argc >= 3 && std::string(argv[1]) == "--json") {
         const std::string ontologyPath = argv[2];
 
-        // Read entire stdin into a string
         std::istreambuf_iterator<char> begin(std::cin), end;
         std::string payload(begin, end);
         if (payload.empty()) {
@@ -349,7 +434,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // Mode A: original 3-arg file mode
+    // Mode A (old): original 3-arg file mode
     if (argc == 4) {
         const std::string ontologyPath  = argv[1];
         const std::string candidatesCsv = argv[2];
@@ -360,4 +445,5 @@ int main(int argc, char** argv) {
 
     usage();
     return 1;
+    */
 }

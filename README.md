@@ -39,6 +39,21 @@ Then use
 ./EntityMatching [path_to_ontology] [path_to_candidates] [path_to_output]
 ````
 
+### New!
+Example usage:
+```
+cat <<'JSON' | ./EntityMatching ./foodon.json | tee results.json
+{
+  "terms": ["skim milk", "flour", "beef"],
+  "n": 3,
+  "band": 25,
+  "hash_funcs": 100,
+  "thresh_single": 0.9,
+  "thresh_multi": 0.5
+}
+JSON
+```
+
 to perform the ontology matching. 
 
 ## Configuration

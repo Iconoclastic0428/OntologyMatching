@@ -22,8 +22,12 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <memory>
 
 #include <tbb/concurrent_unordered_map.h>
+
+// Flexible request parser (factory declared in header; defined below in this file)
+#include "requestIO.h"
 
 using nlohmann::json;
 
@@ -74,6 +78,189 @@ struct Match {
     double score;       // optional; 1.0 if not computed
 };
 
+// ---------------------- Ontology JSON sanitizer (for SNOMED/OBOGraphs) ----------------------
+
+// Convert various JSON shapes to a best-effort string.
+static std::string to_string_flexible(const nlohmann::json& v) {
+    using nlohmann::json;
+    if (v.is_string()) return v.get<std::string>();
+    if (v.is_boolean()) return v.get<bool>() ? "true" : "false";
+    if (v.is_number_integer())  return std::to_string(v.get<long long>());
+    if (v.is_number_unsigned()) return std::to_string(v.get<unsigned long long>());
+    if (v.is_number_float())    return std::to_string(v.get<double>());
+
+    if (v.is_object()) {
+        // Common OBOGraphs/SNOMED patterns:
+        if (v.contains("label")  && v["label"].is_string())   return v["label"].get<std::string>();
+        if (v.contains("@value") && v["@value"].is_string())  return v["@value"].get<std::string>();
+        if (v.contains("value")  && v["value"].is_string())   return v["value"].get<std::string>();
+        if (v.contains("id")     && v["id"].is_string())      return v["id"].get<std::string>();
+        if (v.contains("curie")  && v["curie"].is_string())   return v["curie"].get<std::string>();
+        if (v.contains("@id")    && v["@id"].is_string())     return v["@id"].get<std::string>();
+        // fallback: dump to a compact string
+        return v.dump();
+    }
+
+    if (v.is_array()) {
+        // Join items defensively
+        std::string out;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i) out += "; ";
+            out += to_string_flexible(v[i]);
+        }
+        return out;
+    }
+    return "";
+}
+
+// Walk the OBOGraphs JSON and coerce all string-expected fields into strings.
+static void sanitize_ontology_json(nlohmann::json& j) {
+    using nlohmann::json;
+    if (!j.is_object()) return;
+    if (!j.contains("graphs") || !j["graphs"].is_array()) return;
+
+    for (auto& g : j["graphs"]) {
+        if (!g.is_object()) continue;
+
+        // ---- Nodes ----
+        if (g.contains("nodes") && g["nodes"].is_array()) {
+            for (auto& node : g["nodes"]) {
+                if (!node.is_object()) continue;
+
+                // id/type/lbl should be strings
+                if (node.contains("id")   && !node["id"].is_string())
+                    node["id"] = to_string_flexible(node["id"]);
+                if (node.contains("type") && !node["type"].is_string())
+                    node["type"] = to_string_flexible(node["type"]);
+                if (node.contains("lbl")  && !node["lbl"].is_string())
+                    node["lbl"] = to_string_flexible(node["lbl"]);
+
+                // meta.basicPropertyValues[*].pred / val should be strings
+                if (node.contains("meta") && node["meta"].is_object()) {
+                    auto& meta = node["meta"];
+
+                    if (meta.contains("basicPropertyValues") && meta["basicPropertyValues"].is_array()) {
+                        for (auto& bpv : meta["basicPropertyValues"]) {
+                            if (!bpv.is_object()) continue;
+                            if (bpv.contains("pred") && !bpv["pred"].is_string())
+                                bpv["pred"] = to_string_flexible(bpv["pred"]);
+                            if (bpv.contains("val")  && !bpv["val"].is_string())
+                                bpv["val"]  = to_string_flexible(bpv["val"]);
+                        }
+                    }
+
+                    // Optional: xrefs/annotations sometimes carry string-like objects too
+                    if (meta.contains("xrefs") && meta["xrefs"].is_array()) {
+                        for (auto& xr : meta["xrefs"]) {
+                            if (!xr.is_object()) continue;
+                            if (xr.contains("val")  && !xr["val"].is_string())
+                                xr["val"]  = to_string_flexible(xr["val"]);
+                            if (xr.contains("pred") && !xr["pred"].is_string())
+                                xr["pred"] = to_string_flexible(xr["pred"]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Edges ----
+        if (g.contains("edges") && g["edges"].is_array()) {
+            for (auto& e : g["edges"]) {
+                if (!e.is_object()) continue;
+
+                // sub/pred/obj should be strings
+                if (e.contains("sub")  && !e["sub"].is_string())
+                    e["sub"]  = to_string_flexible(e["sub"]);
+                if (e.contains("pred") && !e["pred"].is_string())
+                    e["pred"] = to_string_flexible(e["pred"]);
+                if (e.contains("obj")  && !e["obj"].is_string())
+                    e["obj"]  = to_string_flexible(e["obj"]);
+
+                // meta.basicPropertyValues[*].pred / val should be strings
+                if (e.contains("meta") && e["meta"].is_object()) {
+                    auto& meta = e["meta"];
+                    if (meta.contains("basicPropertyValues") && meta["basicPropertyValues"].is_array()) {
+                        for (auto& bpv : meta["basicPropertyValues"]) {
+                            if (!bpv.is_object()) continue;
+                            if (bpv.contains("pred") && !bpv["pred"].is_string())
+                                bpv["pred"] = to_string_flexible(bpv["pred"]);
+                            if (bpv.contains("val")  && !bpv["val"].is_string())
+                                bpv["val"]  = to_string_flexible(bpv["val"]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------- Robust OBOGraphs fallback parser ----------------------
+// If parseJson(...) still throws after sanitization, use this to fill `index` and `ontos`.
+
+static std::vector<std::string> parse_obographs_robust(
+    const json& j,
+    std::unordered_map<std::string, std::pair<std::string, std::string>>& index)
+{
+    std::vector<std::string> out;
+    if (!j.is_object()) return out;
+    if (!j.contains("graphs") || !j["graphs"].is_array()) return out;
+
+    auto add_label = [&](const std::string& id, const std::string& canonical_label,
+                         const std::string& label_variant)
+    {
+        // Normalize using the same tokenization pipeline as queries
+        auto toks = filter_string(label_variant);
+        if (toks.empty()) return;
+        std::string norm = join_filtered_tokens(toks);
+        // Insert into index if not present; map to (id, canonical_label)
+        if (index.emplace(norm, std::make_pair(id, canonical_label)).second) {
+            out.push_back(norm);
+        }
+    };
+
+    for (const auto& g : j["graphs"]) {
+        if (!g.is_object()) continue;
+        if (!g.contains("nodes") || !g["nodes"].is_array()) continue;
+
+        for (const auto& node : g["nodes"]) {
+            if (!node.is_object()) continue;
+
+            std::string id  = node.contains("id")  ? to_string_flexible(node["id"])  : "";
+            std::string lbl = node.contains("lbl") ? to_string_flexible(node["lbl"]) : "";
+
+            if (id.empty() && lbl.empty()) continue;
+            if (lbl.empty()) lbl = id; // fallback canonical label
+
+            // Add canonical label
+            add_label(id, lbl, lbl);
+
+            // Add SKOS pref/alt labels from meta.basicPropertyValues
+            if (node.contains("meta") && node["meta"].is_object()) {
+                const auto& meta = node["meta"];
+                if (meta.contains("basicPropertyValues") && meta["basicPropertyValues"].is_array()) {
+                    for (const auto& bpv : meta["basicPropertyValues"]) {
+                        if (!bpv.is_object()) continue;
+                        std::string pred = bpv.contains("pred") ? to_string_flexible(bpv["pred"]) : "";
+                        std::string val  = bpv.contains("val")  ? to_string_flexible(bpv["val"])  : "";
+                        if (val.empty()) continue;
+
+                        // Look for typical SKOS label preds
+                        if (pred.find("skos/core#prefLabel") != std::string::npos ||
+                            pred.find("skos/core#altLabel")  != std::string::npos ||
+                            pred.find("prefLabel")            != std::string::npos ||
+                            pred.find("altLabel")             != std::string::npos) {
+                            add_label(id, lbl, val);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
+// ---------------------- BuiltOntology ----------------------
+
 struct BuiltOntology {
     LSH lsh;
     int n = 3;
@@ -85,36 +272,86 @@ struct BuiltOntology {
     : lsh(band, hash_funcs), n(n_grams)
     {
         json j = ontology_json;
+        sanitize_ontology_json(j);  // sanitize before parse
         tbb::concurrent_unordered_map<std::string, std::string> dummy_inverted_index;
-        std::vector<std::string> ontos = parseJson(j, index, dummy_inverted_index);
+
+        std::vector<std::string> ontos;
+        try {
+            ontos = parseJson(j, index, dummy_inverted_index);
+        } catch (const std::exception& e) {
+            std::cerr << "[warn] parseJson failed (" << e.what() << "), falling back to robust parser.\n";
+            index.clear();
+            ontos = parse_obographs_robust(j, index);
+        }
+
         for (const auto& s : ontos) {
             lsh.insert(text_to_ngrams(s, n), s);  // index with character n-grams
         }
     }
 
     // ===== Original: build from file path + on-disk cache =====
-    // (Kept for later use, currently unused.)
-    
     BuiltOntology(const std::string& ontologyPath, int band=25, int hash_funcs=100, int n_grams=3)
     : lsh(band, hash_funcs), n(n_grams)
     {
-        // parseJson fills index with: normalized_text -> (id,label)
         tbb::concurrent_unordered_map<std::string, std::string> dummy_inverted_index;
         json j = process_json(ontologyPath);
-        std::vector<std::string> ontos = parseJson(j, index, dummy_inverted_index);
+        sanitize_ontology_json(j);  // sanitize before parse
 
+        std::vector<std::string> ontos;
         const std::string bin_filename = get_base_filename(ontologyPath) + ".bin";
+
+        // If a cache exists, we can load LSH and skip (re)indexing text.
         if (file_exists(bin_filename)) {
-            lsh.load_from_disk(bin_filename);
-        } else {
-            for (const auto& s : ontos) {
-                lsh.insert(text_to_ngrams(s, n), s);  // index with character n-grams
+            // Still need `index` filled for id/label lookup in results:
+            try {
+                (void)parseJson(j, index, dummy_inverted_index);
+            } catch (const std::exception& e) {
+                std::cerr << "[warn] parseJson failed while preparing index ("
+                          << e.what() << "), using robust parser for index.\n";
+                index.clear();
+                (void)parse_obographs_robust(j, index);
             }
-            lsh.save_to_disk(bin_filename);
+            lsh.load_from_disk(bin_filename);
+            return;
         }
+
+        // No cache; build both index and LSH.
+        try {
+            ontos = parseJson(j, index, dummy_inverted_index);
+        } catch (const std::exception& e) {
+            std::cerr << "[warn] parseJson failed (" << e.what() << "), falling back to robust parser.\n";
+            index.clear();
+            ontos = parse_obographs_robust(j, index);
+        }
+
+        for (const auto& s : ontos) {
+            lsh.insert(text_to_ngrams(s, n), s);  // index with character n-grams
+        }
+        lsh.save_to_disk(bin_filename);
     }
-    
 };
+
+// ------------- Factory definition (now that BuiltOntology is complete) -------------
+// Declared in RequestIO.h; defined here to avoid constructing incomplete type in the header.
+std::unique_ptr<BuiltOntology> build_ontology_for_request(
+    const RequestConfig& rc,
+    const std::string& ontologyPathArg // argv[1], used as fallback
+) {
+    if (rc.ontology_json.has_value()) {
+        return std::unique_ptr<BuiltOntology>(
+            new BuiltOntology(*rc.ontology_json, rc.band, rc.hash_funcs, rc.n)
+        );
+    }
+    if (rc.ontology_file_json.has_value() && !rc.ontology_file_json->empty()) {
+        return std::unique_ptr<BuiltOntology>(
+            new BuiltOntology(*rc.ontology_file_json, rc.band, rc.hash_funcs, rc.n)
+        );
+    }
+    // Fallback to legacy path
+    return std::unique_ptr<BuiltOntology>(
+        new BuiltOntology(ontologyPathArg, rc.band, rc.hash_funcs, rc.n)
+    );
+}
 
 // ---------------------- In-memory matching APIs ----------------------
 
@@ -246,60 +483,6 @@ static json matches_to_json(const std::unordered_map<std::string, std::vector<Ma
     return j;
 }
 
-// ---------------------- Original file-driven matching (preserved) ----------------------
-
-// (Kept for later; currently unused here.)
-/*
-void match_file_mode(const std::string& ontologyPath,
-                     const std::string& ingredientPath,
-                     const std::string& outputPath,
-                     int hash_funcs = 100, int band = 25, int n = 3)
-{
-    auto t0 = std::chrono::high_resolution_clock::now();
-
-    // Build ontology index + LSH
-    BuiltOntology BO(ontologyPath, band, hash_funcs, n);
-
-    // Load candidate rows: processCSV returns map key -> vector<string>
-    // where vector[0] is the main string, vector[1..] are expansions / possibles
-    std::unordered_map<std::string, std::vector<std::string>> csv = processCSV(ingredientPath, 1);
-
-    // Build an "expansions" map keyed by candidate key.
-    std::unordered_map<std::string, std::vector<std::string>> expansions;
-    expansions.reserve(csv.size());
-    for (auto& [key, vec] : csv) {
-        if (vec.empty()) continue;
-        std::vector<std::string> ex;
-        ex.reserve(std::max<size_t>(1, vec.size()));
-        // include the primary string itself plus any extra columns as variants
-        ex.push_back(vec[0]);
-        if (vec.size() > 1) ex.insert(ex.end(), vec.begin() + 1, vec.end());
-        expansions.emplace(key, std::move(ex));
-    }
-
-    // Run in-memory matching over all variants and union back per key
-    auto grouped = match_terms_with_expansions_in_memory(BO, expansions, 0.90, 0.50);
-
-    // Write text output to match your previous format
-    std::ofstream out(outputPath);
-    if (!out.is_open()) {
-        std::cerr << "Failed to open " << outputPath << "\n";
-        return;
-    }
-    for (auto& [key, matches] : grouped) {
-        out << key << "\n";
-        for (auto& m : matches) {
-            out << "(" << m.id << " " << m.label << "), ";
-        }
-        out << "\n";
-    }
-
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto secs = std::chrono::duration_cast<std::chrono::seconds>(t1 - t0).count();
-    std::cerr << "Finished file mode in " << secs << "s\n";
-}
-*/
-
 // ---------------------- JSON (stdin/stdout) in-memory mode ----------------------
 
 static void usage() {
@@ -310,15 +493,14 @@ static void usage() {
         "    \"terms\": [\"t1\",\"t2\"],\n"
         "    \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
         "    \"thresh_single\":0.9, \"thresh_multi\":0.5\n"
-        "  }' | ./EntityMatching > results.json\n\n"
+        "  }' | ./EntityMatching <ontology.json> > results.json\n\n"
         "Or with expansions:\n"
         "  {\n"
         "    \"ontology\": { /* ontology JSON */ },\n"
         "    \"expansions\": {\"key\":[\"v1\",\"v2\"]},\n"
         "    \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
         "    \"thresh_single\":0.9, \"thresh_multi\":0.5\n"
-        "  }\n"
-        ;
+        "  }\n";
 }
 
 int main(int argc, char** argv) {
@@ -326,15 +508,17 @@ int main(int argc, char** argv) {
         std::cerr <<
           "Usage:\n"
           "  ./EntityMatching <ontology.json> < request.json > results.json\n\n"
-          "request.json schema (one of):\n"
+          "request.json schema (any of):\n"
           "  {\"terms\":[\"t1\",\"t2\"], \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
           "   \"thresh_single\":0.9, \"thresh_multi\":0.5}\n\n"
           "  {\"expansions\": {\"key\":[\"v1\",\"v2\"]}, \"n\":3, \"band\":25, \"hash_funcs\":100,\n"
-          "   \"thresh_single\":0.9, \"thresh_multi\":0.5}\n";
+          "   \"thresh_single\":0.9, \"thresh_multi\":0.5}\n\n"
+          "  {\"ontology\": { /* inline ontology JSON */ }, \"terms\": [...], ...}\n"
+          "  {\"ontology_file\": \"/path/to/ontology.json\", \"expansions\": {...}, ...}\n";
         return 1;
     }
 
-    const std::string ontologyPath = argv[1];
+    const std::string ontologyPathArg = argv[1];
 
     // Read all of stdin into a string
     std::istreambuf_iterator<char> begin(std::cin), end;
@@ -344,106 +528,28 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    nlohmann::json cfg;
-    try {
-        cfg = nlohmann::json::parse(payload);
-    } catch (const std::exception& e) {
-        std::cerr << "Error parsing JSON: " << e.what() << "\n";
+    // Parse flexible request JSON
+    RequestConfig rc;
+    std::string perr;
+    if (!parse_request_json(payload, rc, perr)) {
+        std::cerr << perr << "\n";
         return 2;
     }
 
-    const int n          = cfg.value("n", 3);
-    const int band       = cfg.value("band", 25);
-    const int hash_funcs = cfg.value("hash_funcs", 100);
-    const double ts      = cfg.value("thresh_single", 0.90);
-    const double tm      = cfg.value("thresh_multi", 0.50);
+    // Build ontology using (priority): inline JSON, JSON's ontology_file, or argv[1].
+    std::unique_ptr<BuiltOntology> BO_ptr = build_ontology_for_request(rc, ontologyPathArg);
+    BuiltOntology& BO = *BO_ptr;
 
-    // Build from ontology file (uses .bin cache if present)
-    BuiltOntology BO(ontologyPath, band, hash_funcs, n);
-
+    // Execute matching
     nlohmann::json out;
-    if (cfg.contains("terms")) {
-        std::vector<std::string> terms = cfg["terms"].get<std::vector<std::string>>();
-        auto res = match_terms_in_memory(BO, terms, ts, tm);
-        out = matches_to_json(res);
-    } else if (cfg.contains("expansions")) {
-        std::unordered_map<std::string, std::vector<std::string>> expansions;
-        for (auto it = cfg["expansions"].begin(); it != cfg["expansions"].end(); ++it) {
-            expansions[it.key()] = it.value().get<std::vector<std::string>>();
-        }
-        auto res = match_terms_with_expansions_in_memory(BO, expansions, ts, tm);
+    if (!rc.terms.empty()) {
+        auto res = match_terms_in_memory(BO, rc.terms, rc.thresh_single, rc.thresh_multi);
         out = matches_to_json(res);
     } else {
-        std::cerr << "JSON must contain either \"terms\" or \"expansions\".\n";
-        return 2;
+        auto res = match_terms_with_expansions_in_memory(BO, rc.expansions, rc.thresh_single, rc.thresh_multi);
+        out = matches_to_json(res);
     }
 
     std::cout << out.dump(2) << std::endl;
     return 0;
-
-
-    // ===== Old modes retained but commented out for now =====
-    /*
-    // Mode B (old): --json <ontology.json> + options on stdin
-    if (argc >= 3 && std::string(argv[1]) == "--json") {
-        const std::string ontologyPath = argv[2];
-
-        std::istreambuf_iterator<char> begin(std::cin), end;
-        std::string payload(begin, end);
-        if (payload.empty()) {
-            std::cerr << "Error: no JSON provided on stdin.\n";
-            usage();
-            return 2;
-        }
-
-        json cfg;
-        try {
-            cfg = json::parse(payload);
-        } catch (const std::exception& e) {
-            std::cerr << "Error parsing JSON: " << e.what() << "\n";
-            return 2;
-        }
-
-        const int n          = cfg.value("n", 3);
-        const int band       = cfg.value("band", 25);
-        const int hash_funcs = cfg.value("hash_funcs", 100);
-        const double ts      = cfg.value("thresh_single", 0.90);
-        const double tm      = cfg.value("thresh_multi", 0.50);
-
-        BuiltOntology BO(ontologyPath, band, hash_funcs, n);
-
-        json out;
-        if (cfg.contains("terms")) {
-            std::vector<std::string> terms = cfg["terms"].get<std::vector<std::string>>();
-            auto res = match_terms_in_memory(BO, terms, ts, tm);
-            out = matches_to_json(res);
-        } else if (cfg.contains("expansions")) {
-            std::unordered_map<std::string, std::vector<std::string>> expansions;
-            for (auto it = cfg["expansions"].begin(); it != cfg["expansions"].end(); ++it) {
-                expansions[it.key()] = it.value().get<std::vector<std::string>>();
-            }
-            auto res = match_terms_with_expansions_in_memory(BO, expansions, ts, tm);
-            out = matches_to_json(res);
-        } else {
-            std::cerr << "JSON must contain either \"terms\" or \"expansions\".\n";
-            usage();
-            return 2;
-        }
-
-        std::cout << out.dump(2) << std::endl;
-        return 0;
-    }
-
-    // Mode A (old): original 3-arg file mode
-    if (argc == 4) {
-        const std::string ontologyPath  = argv[1];
-        const std::string candidatesCsv = argv[2];
-        const std::string outputPath    = argv[3];
-        match_file_mode(ontologyPath, candidatesCsv, outputPath);
-        return 0;
-    }
-
-    usage();
-    return 1;
-    */
 }
